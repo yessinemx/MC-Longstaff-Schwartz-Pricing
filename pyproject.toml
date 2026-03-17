@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pricing"
+version = "0.2.0"
+description = "A Python library for pricing American options using Longstaff-Schwartz Monte Carlo, Trinomial Tree, and Black-Scholes methods."
+readme = "README.md"
+authors = [
+    { name = "Yassine Mannai" }
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+]
+requires-python = ">=3.12"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=23.0",
+    "mypy>=1.0",
+    "types-setuptools",
+    "streamlit",
+    "pandas",
+    "matplotlib",
+    "scipy"
+]
+
+
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["pricing*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.*", "py.typed"]
+
+[tool.black]
+line-length = 88
+target-version = ['py312']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
