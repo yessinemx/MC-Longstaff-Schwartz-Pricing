@@ -1,0 +1,155 @@
+from __future__ import annotations
+import datetime as dt
+from typing import Dict, Tuple, Literal, Optional
+
+import numpy as np
+from scipy.stats import norm
+
+
+class BlackScholesPricer:
+    """
+    Pricer Black–Scholes pour options européennes (call/put),
+    avec possibilité d’un dividende discret unique.
+
+    Parameters
+    ----------
+    S : float
+        Prix spot du sous-jacent.
+    K : float
+        Strike de l’option.
+    T : float
+        Maturité (en années).
+    r : float
+        Taux sans risque.
+    sigma : float
+        Volatilité annuelle.
+    option_type : {'call', 'put'}
+        Type d’option.
+    dividend : float, optional
+        Montant du dividende (par défaut 0).
+    dividend_date : datetime, optional
+        Date du dividende si applicable.
+    """
+
+    def __init__(
+        self,
+        S: float,
+        K: float,
+        T: float,
+        r: float,
+        sigma: float,
+        option_type: Literal["call", "put"],
+        dividend: float = 0.0,
+        dividend_date: Optional[dt.date] = None,
+    ) -> None:
+        """Initialise le modèle Black–Scholes."""
+        self.S: float = S
+        self.K: float = K
+        self.T: float = T
+        self.r: float = r
+        self.sigma: float = sigma
+        self.option_type: Literal["call", "put"] = option_type.lower()  # type: ignore
+        self.dividend: float = float(dividend)
+        self.dividend_date: Optional[dt.date] = dividend_date
+        self._N, self._n = norm.cdf, norm.pdf
+
+    # ------------------- utilitaires -------------------
+    def _spot_adjusted(self) -> float:
+        """
+        Calcule le spot ajusté en tenant compte d’un dividende discret.
+        """
+        S = self.S
+        if self.dividend and self.dividend_date:
+            tD = max((self.dividend_date - dt.date.today()).days / 365.0, 0.0)
+            S -= self.dividend * np.exp(-self.r * tD)
+        return S
+
+    def _d1d2(self, S_adj: float) -> Tuple[float, float]:
+        """
+        Renvoie les paramètres d1 et d2 du modèle Black–Scholes.
+        """
+        T = self.T
+        sig = self.sigma
+        rt = sig * np.sqrt(T)
+        d1 = (np.log(S_adj / self.K) + (self.r + 0.5 * sig**2) * T) / rt
+        d2 = d1 - rt
+        return d1, d2
+
+    # ------------------- pricing -------------------
+    def price(self) -> float:
+        """
+        Calcule le prix théorique (call ou put) selon Black–Scholes.
+        """
+        S_adj = self._spot_adjusted()
+        d1, d2 = self._d1d2(S_adj)
+        discK = self.K * np.exp(-self.r * self.T)
+        if self.option_type == "call":
+            return S_adj * self._N(d1) - discK * self._N(d2)
+        if self.option_type == "put":
+            return discK * self._N(-d2) - S_adj * self._N(-d1)
+        raise ValueError("option_type must be 'call' or 'put'")
+
+    # ------------------- grecs -------------------
+    def _delta_theta_rho(
+        self, S_adj: float, d1: float, d2: float
+    ) -> Tuple[float, float, float]:
+        """
+        Calcule (delta, theta, rho) en fonction du type d'option.
+        Theta renvoyé au format annuel (conversion /365 faite ailleurs).
+        """
+        T, sig, discK = self.T, self.sigma, self.K * np.exp(-self.r * self.T)
+        base_theta = -S_adj * self._n(d1) * sig / (2 * np.sqrt(T))
+        if self.option_type == "call":
+            delta = self._N(d1) * (S_adj / self.S)
+            theta = base_theta - self.r * discK * self._N(d2)
+            rho = self.K * T * np.exp(-self.r * T) * self._N(d2)
+        else:
+            delta = -self._N(-d1) * (S_adj / self.S)
+            theta = base_theta + self.r * discK * self._N(-d2)
+            rho = -self.K * T * np.exp(-self.r * T) * self._N(-d2)
+        return delta, theta, rho
+
+    def _gamma_vega_vanna(self, S_adj: float, d1: float) -> Tuple[float, float, float]:
+        """
+        Calcule (gamma, vega, vanna) en unités “brutes”.
+        """
+        T, sig = self.T, self.sigma
+        rootT = np.sqrt(T)
+        gamma = self._n(d1) / (S_adj * sig * rootT) * (S_adj / self.S)
+        vega = S_adj * rootT * self._n(d1)
+        vanna = self._n(d1) * rootT * (1 - d1 / (sig * rootT))
+        return gamma, vega, vanna
+
+    def greeks(self) -> Dict[str, float]:
+        """
+        Calcule les grecs analytiques : delta, gamma, theta, vega, rho, vanna.
+        Theta est ramené à un jour, vega/rho/vanna par 1% de variation.
+        """
+        S_adj = self._spot_adjusted()
+        d1, d2 = self._d1d2(S_adj)
+        delta, theta, rho = self._delta_theta_rho(S_adj, d1, d2)
+        gamma, vega, vanna = self._gamma_vega_vanna(S_adj, d1)
+        return {
+            "delta": float(delta),
+            "gamma": float(gamma),
+            "theta": float(theta) / 365.0,  # par jour
+            "vega": float(vega) / 100.0,    # par 1% de vol
+            "rho": float(rho) / 100.0,      # par 1% de taux
+            "vanna": float(vanna) / 100.0,  # par 1% de vol
+        }
+
+    # ------------------- mise à jour -------------------
+    def update(self, **kwargs) -> "BlackScholesPricer":
+        """
+        Met à jour un ou plusieurs paramètres du pricer.
+        Ex : bs.update(K=105, sigma=0.25, option_type='put')
+        """
+        allowed = {"S", "K", "T", "r", "sigma", "option_type", "dividend", "dividend_date"}
+        for k, v in kwargs.items():
+            if k not in allowed:
+                raise AttributeError(f"Unknown parameter: {k}")
+            if k == "option_type":
+                self.option_type = str(v).lower()  # type: ignore
+            else:
+                setattr(self, k, v)
+        return self
